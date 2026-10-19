@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NANDA Flow Viewer</title>
+<style>
+  :root {
+    --bg: #f5f6fb; --surface: #fff; --border: #e7e8ef; --text: #111827; --muted: #6b7280;
+    --primary: #4f46e5; --primary-dark: #4338ca; --primary-soft: #eef2ff;
+    --success: #059669; --danger: #dc2626; --danger-soft: #fee2e2;
+    --nanda: #7c3aed; --card: #0d9488; --a2a: #2563eb; --mcp: #ea580c; --startup: #9ca3af; --negotiator: #db2777;
+    --radius: 14px; --shadow-sm: 0 1px 2px rgba(16,24,40,.06); --shadow: 0 4px 16px rgba(16,24,40,.08);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+  button, input, textarea { font: inherit; color: inherit; }
+
+  header { background: linear-gradient(120deg, #4338ca 0%, #6d28d9 55%, #9333ea 100%); color: #fff; padding: 18px 28px; }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: -.01em; }
+  header p { margin: 4px 0 0; opacity: .85; font-size: 13px; }
+  .chain { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+  .chain span { background: rgba(255,255,255,.16); border-radius: 999px; padding: 3px 10px; }
+
+  .layout { display: grid; grid-template-columns: 330px 1fr; gap: 20px; padding: 20px 28px; align-items: start; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 16px; }
+  .panel + .panel { margin-top: 16px; }
+  .panel h2 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+
+  .status-item { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; flex: none; background: #d1d5db; }
+  .dot.ok { background: var(--success); box-shadow: 0 0 0 3px #d1fae5; }
+  .dot.bad { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+  .status-name { font-weight: 600; }
+  .status-detail { color: var(--muted); font-size: 12px; word-break: break-all; }
+  .link-btn { background: none; border: none; color: var(--primary); cursor: pointer; padding: 0; font-size: 12px; }
+
+  label.field { display: block; font-weight: 600; margin: 12px 0 6px; }
+  textarea, input[type=text] { width: 100%; border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; background: #fafbff; }
+  textarea { min-height: 92px; resize: vertical; }
+  textarea:focus, input[type=text]:focus { outline: 2px solid var(--primary-soft); border-color: var(--primary); }
+  .seg { display: flex; background: #f1f2f8; border-radius: 10px; padding: 3px; }
+  .seg button { flex: 1; border: none; background: none; padding: 6px; border-radius: 8px; cursor: pointer; color: var(--muted); font-weight: 600; }
+  .seg button.on { background: #fff; color: var(--text); box-shadow: var(--shadow-sm); }
+  .check { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+  .check.disabled { color: var(--muted); }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .run { margin-top: 16px; width: 100%; border: none; border-radius: 10px; padding: 11px; cursor: pointer;
+    background: var(--primary); color: #fff; font-weight: 700; font-size: 15px; }
+  .run:hover { background: var(--primary-dark); }
+  .run:disabled { opacity: .6; cursor: wait; }
+
+  .legend div { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
+  .legend i { width: 26px; border-top: 3px solid; display: inline-block; }
+  .legend i.dash { border-top-style: dashed; }
+
+  .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 14px; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; box-shadow: var(--shadow-sm); }
+  .stat b { display: block; font-size: 20px; }
+  .stat span { color: var(--muted); font-size: 12px; }
+
+  .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  .lanes { display: grid; grid-template-columns: repeat(var(--n, 3), 1fr); border-bottom: 1px solid var(--border); background: #fbfbfe; position: sticky; top: 0; z-index: 3; }
+  .lane-head { text-align: center; padding: 12px 6px; }
+  .lane-head .icon { width: 38px; height: 38px; border-radius: 12px; margin: 0 auto 6px; display: grid; place-items: center; font-size: 19px; color: #fff; }
+  .lane-head b { display: block; font-size: 13.5px; }
+  .lane-head small { color: var(--muted); font-size: 11.5px; }
+  .lane-head.active .icon { animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(79,70,229,.35); } 50% { box-shadow: 0 0 0 8px rgba(79,70,229,0); } }
+
+  /* Lifelines are a background so they scroll with (and cover) all rows. */
+  .rows { position: relative; min-height: 420px; max-height: calc(100vh - 290px); overflow-y: auto; padding-bottom: 24px;
+    background-attachment: local; }
+  .empty { position: relative; text-align: center; color: var(--muted); padding: 120px 20px; }
+
+  .row { position: relative; height: 46px; cursor: pointer; animation: appear .25s ease-out; }
+  .row:hover { background: rgba(79,70,229,.035); }
+  @keyframes appear { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .seq { position: absolute; left: 8px; top: 15px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .ms { position: absolute; right: 10px; top: 15px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .arrow { position: absolute; top: 30px; border-top: 2.5px solid var(--c); }
+  .arrow.dashed { border-top-style: dashed; border-top-width: 2px; }
+  .arrow.right::after, .arrow.left::after { content: ""; position: absolute; top: -7px; border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
+  .arrow.right::after { right: -2px; border-left: 10px solid var(--c); }
+  .arrow.left::after { left: -2px; border-right: 10px solid var(--c); }
+  .arrow.self { height: 12px; top: 24px; border: 2.5px solid var(--c); border-left: none; border-radius: 0 8px 8px 0; }
+  .label { position: absolute; top: 7px; text-align: center; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 6px; }
+  .label .tag { display: inline-block; font-size: 10.5px; font-weight: 700; color: #fff; background: var(--c); border-radius: 5px; padding: 0 5px; margin-right: 5px; letter-spacing: .03em; }
+  .row.response .label { color: #374151; }
+  .label .txt { background: rgba(255,255,255,.88); border-radius: 4px; padding: 0 3px; }
+
+  .step { position: relative; margin: 12px 14px 4px; padding: 7px 12px; border-radius: 10px; background: var(--primary-soft); color: var(--primary-dark); font-weight: 700; font-size: 13px; animation: appear .25s ease-out; }
+  .choice { position: relative; margin: 6px 14px; padding: 8px 12px; border-radius: 10px; background: #f0fdfa; color: #115e59; border: 1px solid #99f6e4; font-size: 12.5px; cursor: pointer; }
+  .choice::before { content: "DECISION"; font-size: 10.5px; font-weight: 700; color: #fff; background: var(--card); border-radius: 5px; padding: 0 5px; margin-right: 6px; }
+  .note { position: relative; margin: 6px 14px; padding: 8px 12px; border-radius: 10px; background: #fffbeb; color: #92400e; font-size: 12.5px; }
+  .error { position: relative; margin: 10px 14px; padding: 10px 12px; border-radius: 10px; background: var(--danger-soft); color: #991b1b; font-weight: 600; }
+  .deal { position: relative; margin: 10px 14px; padding: 12px 14px; border-radius: 12px; background: #fdf2f8; border: 1px solid #fbcfe8; cursor: pointer; animation: appear .25s ease-out; }
+  .deal h3 { margin: 0 0 8px; color: #9d174d; font-size: 13.5px; }
+  .deal table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .deal th { text-align: left; color: var(--muted); font-weight: 600; padding: 3px 6px; border-bottom: 1px solid #fbcfe8; }
+  .deal td { padding: 4px 6px; border-bottom: 1px solid #fce7f3; }
+  .deal td.rowhead { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  .deal th.win, .deal td.win { background: #ecfdf5; color: #065f46; }
+  .deal tr.price td { font-weight: 700; }
+  .deal td.differs { box-shadow: inset 3px 0 0 #f59e0b; }
+  .deal .kind { margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .deal .verdict { margin-top: 6px; font-weight: 600; color: #9d174d; }
+  .deal .why { margin-top: 2px; font-size: 12.5px; }
+  .deal .chat { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .deal .chat h4 { margin: 0; font-size: 12.5px; color: #9d174d; }
+  .deal .bubble { max-width: 78%; padding: 6px 10px; border-radius: 10px; font-size: 12.5px; }
+  .deal .bubble.buyer { align-self: flex-start; background: #fff; border: 1px solid #fbcfe8; }
+  .deal .bubble.seller { align-self: flex-end; background: #ecfdf5; border: 1px solid #a7f3d0; }
+  .deal .bubble .who { font-weight: 600; color: var(--muted); }
+  .deal .bubble .msg { margin-top: 2px; font-style: italic; }
+  .advice { position: relative; margin: 10px 14px; padding: 12px 14px; border-radius: 12px; background: #eff6ff; border: 1px solid #bfdbfe; cursor: pointer; animation: appear .25s ease-out; }
+  .advice h3 { margin: 0 0 6px; color: #1e40af; font-size: 13.5px; }
+  .advice pre { margin: 0; white-space: pre-wrap; font-family: inherit; font-size: 12.5px; line-height: 1.5; }
+  .seg button:disabled { opacity: .45; cursor: not-allowed; }
+  .result { position: relative; margin: 14px; padding: 14px 16px; border-radius: 12px; background: #ecfdf5; border: 1px solid #a7f3d0; animation: appear .25s ease-out; }
+  .result h3 { margin: 0 0 8px; color: #065f46; font-size: 14px; }
+  .result pre { margin: 0; white-space: pre-wrap; font-family: inherit; font-size: 13.5px; line-height: 1.55; }
+  .result table.md { border-collapse: collapse; margin: 4px 0; font-size: 12.5px; line-height: 1.35; white-space: normal; }
+  .result table.md th, .result table.md td { border: 1px solid #a7f3d0; padding: 3px 8px; text-align: left; }
+  .result table.md th { background: #d1fae5; }
+
+  .detail { position: relative; margin: 0 14px 8px; background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 12px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; }
+  .detail .k { color: #93c5fd; }
+  .detail .s { color: #86efac; }
+  .detail .n { color: #fca5a5; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NANDA Flow Viewer</h1>
+  <p>Watch agents find each other through the NANDA Index and delegate work over A2A, down to the sellers' MCP tools.</p>
+  <div class="chain">
+    <span>Gift Planner</span><span>&rarr; NANDA Index (discover)</span><span>&rarr; A2A agent card(s)</span>
+    <span>&rarr; Shopping Agent (A2A)</span><span>&rarr; Sellers (MCP)</span>
+    <span>&rarr; Negotiator (A2A, negotiate mode)</span>
+  </div>
+</header>
+
+<div class="layout">
+  <aside>
+    <div class="panel">
+      <h2>Services</h2>
+      <div id="status"><div class="status-detail">Checking&hellip;</div></div>
+      <button class="link-btn" onclick="loadStatus()">Recheck</button>
+    </div>
+
+    <div class="panel">
+      <h2>Run the flow</h2>
+      <label class="field">Job</label>
+      <div class="seg">
+        <button id="job-gifts" class="on" onclick="setJob('gifts')">Buy gifts</button>
+        <button id="job-negotiate" onclick="setJob('negotiate')">Best price (negotiate)</button>
+        <button id="job-advice" onclick="setJob('advice')">Expert advice</button>
+      </div>
+      <label class="field" for="gifts" id="gifts-label">Gift requests (one per line)</label>
+      <textarea id="gifts">headphones under 150
+books under 30</textarea>
+
+      <label class="field" id="mode-label">Find the shopping agent by</label>
+      <div class="seg">
+        <button id="mode-task" class="on" onclick="setMode('task')">By task</button>
+        <button id="mode-urn" onclick="setMode('urn')">NANDA URN</button>
+        <button id="mode-search" onclick="setMode('search')">Keywords</button>
+      </div>
+      <textarea id="target" style="margin-top:8px;min-height:56px"></textarea>
+      <div class="hint" id="target-hint"></div>
+
+      <div class="hint" id="job-hint"></div>
+      <label class="check" id="checkout-row"><input type="checkbox" id="checkout"> Check out at the end</label>
+      <label class="check" id="claude-row"><input type="checkbox" id="claude"> Let Claude choose the agent and plan the messages</label>
+      <div class="hint" id="claude-hint"></div>
+
+      <button class="run" id="run" onclick="run()">Run flow</button>
+    </div>
+
+    <div class="panel legend">
+      <h2>Legend</h2>
+      <div><i style="border-color:var(--nanda)"></i> NANDA Index lookup</div>
+      <div><i style="border-color:var(--card)"></i> Agent card fetch</div>
+      <div><i style="border-color:var(--a2a)"></i> A2A message (agent &rarr; agent)</div>
+      <div><i style="border-color:var(--mcp)"></i> MCP tool call (agent &rarr; seller)</div>
+      <div><i style="border-color:var(--negotiator)"></i> Price offer (negotiator &rarr; seller)</div>
+      <div><i class="dash" style="border-color:#6b7280"></i> Response</div>
+      <div><i class="dash" style="border-color:var(--startup)"></i> Happened earlier, at agent startup</div>
+      <div class="hint">Click any arrow to see the exact JSON on the wire.</div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="stats">
+      <div class="stat"><b id="s-nanda">0</b><span>NANDA lookups</span></div>
+      <div class="stat"><b id="s-card">0</b><span>Card fetches</span></div>
+      <div class="stat"><b id="s-a2a">0</b><span>A2A messages</span></div>
+      <div class="stat"><b id="s-mcp">0</b><span>MCP tool calls</span></div>
+      <div class="stat"><b id="s-offer">0</b><span>Price offers</span></div>
+      <div class="stat"><b id="s-time">&ndash;</b><span>Elapsed</span></div>
+    </div>
+
+    <div class="diagram">
+      <div class="lanes" id="lanes"></div>
+      <div class="rows" id="rows">
+        <div class="empty" id="empty">Press <b>Run flow</b> to watch the agents find and talk to each other.</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const COLORS = { nanda: "var(--nanda)", card: "var(--card)", a2a: "var(--a2a)", mcp: "var(--mcp)", startup: "var(--startup)",
+                 offer: "var(--negotiator)" };
+const TAGS = { nanda: "NANDA", card: "CARD", a2a: "A2A", mcp: "MCP", startup: "NANDA", offer: "OFFER" };
+const ROLE_STYLE = {
+  negotiator: { icon: "&#129309;", color: "var(--negotiator)", sub: "A2A agent" },
+  seller: { icon: "&#127978;", color: "var(--mcp)", sub: "MCP seller" },
+  a2a: { icon: "&#129302;", color: "var(--a2a)", sub: "A2A agent" },
+  other: { icon: "&#128279;", color: "#6b7280", sub: "server" },
+};
+const ROLE_RANK = { planner: 0, index: 1, agent: 2, a2a: 2, negotiator: 3, seller: 4, other: 5 };
+const GIFT_EXAMPLE = "headphones under 150\nbooks under 30";
+const NEGOTIATE_EXAMPLE = "the best gaming laptop under 1500";
+const ADVICE_EXAMPLE = "a laptop for video editing under 1200\na birthday gift for my mom under 50\nheadphones for a long flight under 200";
+let status = null, mode = "task", job = "gifts", source = null, finished = true, counts = {}, activeLane = null;
+let lanes = [];
+const giftText = { gifts: GIFT_EXAMPLE, negotiate: NEGOTIATE_EXAMPLE, advice: ADVICE_EXAMPLE };
+const JOB_LABELS = { gifts: "Gift requests (one per line)", negotiate: "What to buy (quote only)",
+                     advice: "Requests (one per line; each goes to the specialist that fits it)" };
+const JOB_HINTS = {
+  gifts: "",
+  negotiate: "The shopping agent finds the sellers and a negotiator agent through NANDA. The negotiator picks a product at " +
+    "each seller, bargains, and picks the best deal for specs and price. Nothing is added to the cart. Needs Claude in a2a_server.py and negotiator_agent.py.",
+  advice: "Each request is described to the NANDA Index on its own, so the laptop, gift or travel specialist that fits it " +
+    "ranks first. Specialists are read-only: they recommend from the store's catalog but have no cart.",
+};
+
+function baseLanes() {
+  const base = [
+    { id: "planner", role: "planner", name: "Gift Planner", sub: "A2A client agent", icon: "&#127873;", color: "#4f46e5" },
+    { id: "index", role: "index", name: "NANDA Index", sub: status ? status.index_url.replace(/^https?:\/\//, "") : "registry of agents",
+      icon: "&#128269;", color: "var(--nanda)" },
+    { id: "agent", role: "agent", name: job === "gifts" && mode !== "task" ? "Shopping Agent" : (mode === "task" ? "Unknown agent" : "Shopping Agent"),
+      sub: mode === "task" ? "not known until NANDA finds it" : "A2A server", icon: "&#128722;", color: "var(--a2a)" },
+  ];
+  // Advice runs add a lane per candidate agent as the index finds them.
+  return job === "advice" ? base.slice(0, 2) : base;
+}
+
+function laneIndex(id) { return lanes.findIndex(l => l.id === id); }
+
+function renderLanes() {
+  const head = document.getElementById("lanes");
+  head.style.setProperty("--n", lanes.length);
+  head.replaceChildren();
+  for (const l of lanes) {
+    const el = document.createElement("div");
+    el.className = "lane-head" + (activeLane === l.id ? " active" : "");
+    el.id = "lane-" + l.id;
+    el.innerHTML = `<div class="icon" style="background:${l.color}">${l.icon}</div><b></b><small></small>`;
+    el.querySelector("b").textContent = l.name;
+    el.querySelector("small").textContent = l.sub;
+    head.appendChild(el);
+  }
+  const w = 100 / lanes.length;
+  rows.style.background = lanes.map((_, i) =>
+    `linear-gradient(#e5e7f0, #e5e7f0) ${(i + 0.5) * w}% 0 / 2px 100% no-repeat`).join(", ");
+  rows.style.backgroundAttachment = "local";
+  rows.querySelectorAll(".row").forEach(placeRow);
+}
+
+function addLane(ev) {
+  const style = ROLE_STYLE[ev.role] || ROLE_STYLE.other;
+  const port = (ev.url || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const lane = { id: ev.lane, role: ev.role, name: ev.label, sub: style.sub + (port ? " \u00b7 " + port : ""),
+                 icon: style.icon, color: style.color };
+  // A lane first seen as an unknown server is upgraded in place once the trace says what it is.
+  const i = laneIndex(ev.lane);
+  if (i >= 0) lanes[i] = lane; else lanes.push(lane);
+  // Stable order: planner, index, agent, negotiator, then sellers in the order they were found.
+  lanes = lanes.map((l, i) => [l, i]).sort((a, b) => (ROLE_RANK[a[0].role] - ROLE_RANK[b[0].role]) || (a[1] - b[1]))
+               .map(([l]) => l);
+  renderLanes();
+}
+
+async function loadStatus() {
+  const box = document.getElementById("status");
+  try {
+    status = await (await fetch("/api/status")).json();
+  } catch (e) {
+    box.innerHTML = '<div class="status-detail">Flow viewer server not reachable.</div>';
+    return;
+  }
+  box.innerHTML = "";
+  for (const c of status.checks) {
+    const item = document.createElement("div");
+    item.className = "status-item";
+    item.innerHTML = `<span class="dot ${c.ok ? "ok" : "bad"}"></span><div><div class="status-name"></div><div class="status-detail"></div></div>`;
+    item.querySelector(".status-name").textContent = c.name;
+    item.querySelector(".status-detail").textContent = c.detail;
+    box.appendChild(item);
+  }
+  const claude = document.getElementById("claude");
+  claude.disabled = !status.claude_available;
+  document.getElementById("claude-row").classList.toggle("disabled", !status.claude_available);
+  document.getElementById("claude-hint").textContent = status.claude_available
+    ? "Uses ANTHROPIC_API_KEY from the flow viewer's terminal."
+    : "Export ANTHROPIC_API_KEY before starting flow_ui.py to enable.";
+  if (!document.getElementById("target").value) setMode(mode);
+  if (finished && !rows.querySelector(".row")) { lanes = baseLanes(); renderLanes(); }
+}
+
+function setJob(j) {
+  giftText[job] = document.getElementById("gifts").value;
+  job = j;
+  for (const k of ["gifts", "negotiate", "advice"]) document.getElementById("job-" + k).classList.toggle("on", j === k);
+  document.getElementById("gifts").value = giftText[j];
+  document.getElementById("gifts-label").textContent = JOB_LABELS[j];
+  document.getElementById("job-hint").textContent = JOB_HINTS[j];
+  const checkout = document.getElementById("checkout");
+  checkout.disabled = j !== "gifts";
+  if (j !== "gifts") checkout.checked = false;
+  document.getElementById("checkout-row").classList.toggle("disabled", j !== "gifts");
+  // Advice is routed per request by task, so a single URN or keyword search doesn't apply.
+  for (const k of ["urn", "search"]) document.getElementById("mode-" + k).disabled = j === "advice";
+  document.getElementById("mode-label").textContent = j === "advice" ? "Find a specialist for each request by" : "Find the shopping agent by";
+  if (mode === "task" || j === "advice") setMode("task");
+  if (finished && !rows.querySelector(".row")) { lanes = baseLanes(); renderLanes(); }
+}
+
+function setMode(m) {
+  mode = m;
+  for (const k of ["task", "urn", "search"]) document.getElementById("mode-" + k).classList.toggle("on", m === k);
+  const target = document.getElementById("target");
+  const task = status ? { negotiate: status.negotiate_task, advice: status.advice_task }[job] ?? status.planner_task : "";
+  target.value = { task, urn: status ? status.agent_urn : "", search: "personal shopping agent" }[m];
+  document.getElementById("target-hint").textContent = {
+    task: job === "advice"
+      ? "Prefix for each request: the planner sends \u201cprefix: request\u201d to the index, which ranks agents by what they do."
+      : "The planner's job description. The index ranks agents by what they do (description, tags); the planner never names an agent.",
+    urn: "Exact identifier: the index resolves it to the agent card URL.",
+    search: "Keywords: the index searches entry names and returns matches.",
+  }[m];
+}
+
+function bump(id) {
+  counts[id] = (counts[id] || 0) + 1;
+  document.getElementById(id).textContent = counts[id];
+}
+
+function setActive(lane) {
+  if (activeLane) document.getElementById("lane-" + activeLane)?.classList.remove("active");
+  activeLane = lane;
+  if (lane) document.getElementById("lane-" + lane)?.classList.add("active");
+}
+
+function highlight(json) {
+  const text = JSON.stringify(json, null, 2) ?? "";
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null|-?\d+(?:\.\d+)?)\b/g, (m, str, colon, lit) =>
+      str ? (colon ? `<span class="k">${str}</span>${colon}` : `<span class="s">${str}</span>`) : `<span class="n">${lit}</span>`);
+}
+
+function attachDetail(el, detail) {
+  if (detail == null) return;
+  el.addEventListener("click", () => {
+    const next = el.nextElementSibling;
+    if (next && next.classList.contains("detail")) { next.remove(); return; }
+    const pre = document.createElement("div");
+    pre.className = "detail";
+    pre.innerHTML = highlight(detail);
+    el.after(pre);
+  });
+}
+
+function addBlock(cls, text, detail) {
+  const el = document.createElement("div");
+  el.className = cls;
+  el.textContent = text;
+  attachDetail(el, detail);
+  rows.appendChild(el);
+  return el;
+}
+
+function placeRow(row) {
+  const n = lanes.length, w = 100 / n;
+  const a = Math.max(laneIndex(row.dataset.from), 0), b = Math.max(laneIndex(row.dataset.to), 0);
+  const self = a === b;
+  const left = (Math.min(a, b) + 0.5) * w, width = self ? w * 0.18 : Math.abs(a - b) * w;
+  // Labels get at least 1.6 lanes of room, centred on the arrow and kept inside the diagram.
+  const labelWidth = Math.min(Math.max(width, w * 1.6), 90);
+  const centre = self ? left + w * 0.3 : left + width / 2;
+  const labelLeft = Math.min(Math.max(centre - labelWidth / 2, 3), 97 - labelWidth);
+  const label = row.querySelector(".label"), arrow = row.querySelector(".arrow");
+  label.style.left = labelLeft + "%"; label.style.width = labelWidth + "%";
+  arrow.style.left = left + "%"; arrow.style.width = width + "%";
+  arrow.classList.toggle("self", self);
+  arrow.classList.toggle("right", !self && b > a);
+  arrow.classList.toggle("left", !self && b < a);
+}
+
+function addArrow(ev) {
+  const isOffer = ev.kind === "mcp" && ev.detail && (ev.detail.tool === "make_offer");
+  const colorKey = isOffer ? "offer" : ev.kind;
+  const row = document.createElement("div");
+  row.className = "row " + (ev.phase || "");
+  row.dataset.from = ev.from; row.dataset.to = ev.to;
+  row.style.setProperty("--c", COLORS[colorKey] || "#6b7280");
+  const dashed = ev.phase === "response" || ev.kind === "startup";
+  row.innerHTML = `<span class="seq">${ev.seq}</span>
+    <div class="label"><span class="tag"></span><span class="txt"></span></div>
+    <div class="arrow ${dashed ? "dashed" : ""}"></div>
+    ${ev.ms != null ? `<span class="ms">${ev.ms} ms</span>` : ""}`;
+  row.querySelector(".tag").textContent = TAGS[colorKey] || ev.kind.toUpperCase();
+  row.querySelector(".txt").textContent = ev.label;
+  row.title = ev.label;
+  attachDetail(row, ev.detail);
+  rows.appendChild(row);
+  placeRow(row);
+  setActive(ev.to);
+  if (ev.phase === "request" && ev.kind in { nanda: 1, card: 1, a2a: 1, mcp: 1 }) bump("s-" + ev.kind);
+  if (ev.phase === "request" && isOffer) bump("s-offer");
+}
+
+// Claude sometimes answers in Markdown: show **bold**, headings, "-" lists and | tables | as styling.
+function markdown(text) {
+  const esc = String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const styled = esc.replace(/^#{1,6}\s*(.+)$/gm, "<b>$1</b>")
+            .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+            .replace(/^(\s*)[-*] /gm, "$1\u2022 ");
+  // Table rows are joined without newlines: the result is shown in a pre-wrap block.
+  return styled.replace(/(?:^\|.*\|[ \t]*(?:\n|$))+/gm, block => {
+    const rows = block.trim().split("\n").filter(r => !/^\|[\s:|-]+\|$/.test(r.trim()));
+    const cells = r => r.trim().slice(1, -1).split("|").map(c => c.trim());
+    const html = rows.map((r, i) => "<tr>" + cells(r).map(c => i ? `<td>${c}</td>` : `<th>${c}</th>`).join("") + "</tr>").join("");
+    return `<table class="md">${html}</table>`;
+  });
+}
+
+function money(v) { return v == null ? "\u2013" : "$" + Number(v).toFixed(2); }
+
+function addDeal(ev) {
+  const o = ev.detail || {};
+  const el = document.createElement("div");
+  el.className = "deal";
+  const offers = o.offers || [];
+  el.innerHTML = `<h3></h3><table><thead><tr><th></th></tr></thead><tbody></tbody></table><div class="kind"></div><div class="verdict"></div><div class="why"></div>`;
+  el.querySelector("h3").textContent = `Best deal \u00b7 \u201c${o.request || ""}\u201d${o.quantity > 1 ? " \u00d7" + o.quantity : ""} (quote only)`;
+  const head = el.querySelector("thead tr");
+  for (const q of offers) {
+    const th = document.createElement("th");
+    th.textContent = q.seller + (q.seller === o.winner ? " \u2605" : "");
+    if (q.seller === o.winner) th.className = "win";
+    head.appendChild(th);
+  }
+  const specKeys = [...new Set(offers.flatMap(q => Object.keys((q.product || {}).specs || {})))];
+  const value = (q, f) => {
+    const p = q.product || {};
+    if (!q.available) return f === "product" ? `unavailable (${q.error || "no quote"})` : "\u2013";
+    switch (f) {
+      case "product": return `${p.name} (${p.brand})`;
+      case "list": return money(q.list_price);
+      case "final": return money(q.final_price);
+      case "saved": return `${money(q.savings)} (${q.savings_pct}%)`;
+      case "offers": return `${q.offers_made} \u00b7 ${q.status}`;
+      case "quote": return q.quote_id;
+      default: return f.startsWith("spec:") ? String((p.specs || {})[f.slice(5)] ?? "\u2013") : String(p[f] ?? "\u2013");
+    }
+  };
+  const lines = [["Product", "product"], ["SKU", "sku"], ["Model no.", "mpn"],
+    ...specKeys.map(k => [k, "spec:" + k]), ["Rating", "rating"], ["List price", "list"],
+    ["Negotiated", "final"], ["Saved", "saved"], ["Offers", "offers"], ["Quote", "quote"]];
+  const body = el.querySelector("tbody");
+  for (const [label, f] of lines) {
+    const tr = document.createElement("tr");
+    if (f === "final") tr.className = "price";
+    const th = document.createElement("td"); th.className = "rowhead"; th.textContent = label; tr.appendChild(th);
+    const values = offers.map(q => value(q, f));
+    offers.forEach((q, i) => {
+      const td = document.createElement("td");
+      td.textContent = values[i];
+      if (q.seller === o.winner) td.classList.add("win");
+      if (f.startsWith("spec:") && new Set(values.filter(v => v !== "\u2013")).size > 1) td.classList.add("differs");
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  }
+  el.querySelector(".kind").textContent = o.same_model
+    ? "Same model and configuration at every seller."
+    : "Different models or configurations: highlighted specs differ.";
+  const win = offers.find(q => q.seller === o.winner);
+  const budget = o.max_budget != null ? `, within the ${money(o.max_budget)} budget` : "";
+  el.querySelector(".verdict").textContent = win
+    ? `Negotiator's pick: ${win.seller}, ${win.product.name} at ${money(win.final_price)}${budget}`
+    : offers.some(q => q.available) ? "Negotiator's pick: none" : "No seller gave a usable quote.";
+  el.querySelector(".why").textContent = (o.winner_reason ? "Why: " + o.winner_reason : "")
+    + (o.decided_by && o.decided_by !== "negotiator" ? ` (chosen by ${o.decided_by})` : "");
+  if ((o.chat || []).length) {
+    const chat = document.createElement("div");
+    chat.className = "chat";
+    chat.innerHTML = "<h4>Negotiation chat</h4>";
+    const verbs = { accept: "accepted at", counter: "countered at", hold: "held at" };
+    for (const t of o.chat) {
+      const say = (cls, who, text, msg) => {
+        const b = document.createElement("div");
+        b.className = "bubble " + cls;
+        const w = document.createElement("span"); w.className = "who"; w.textContent = who;
+        b.appendChild(w);
+        b.appendChild(document.createTextNode(text));
+        if (msg) { const m = document.createElement("div"); m.className = "msg"; m.textContent = `\u201c${msg}\u201d`; b.appendChild(m); }
+        chat.appendChild(b);
+      };
+      say("buyer", `Negotiator \u2192 ${t.seller}${t.sku ? " (" + t.sku + ")" : ""} \u00b7 offer ${Math.round(t.round)}`, ` ${money(t.buyer_offer)}`, t.buyer_message);
+      say("seller", t.seller, ` ${verbs[t.seller_action] || "answered at"} ${money(t.seller_price)}`, t.seller_message);
+    }
+    el.appendChild(chat);
+  }
+  attachDetail(el, o);
+  rows.appendChild(el);
+}
+
+function handle(ev) {
+  document.getElementById("s-time").textContent = (ev.t / 1000).toFixed(1) + " s";
+  if (ev.kind === "step") addBlock("step", ev.label);
+  else if (ev.kind === "lane") addLane(ev);
+  else if (ev.kind === "note") addBlock("note", ev.label, ev.detail);
+  else if (ev.kind === "deal") addDeal(ev);
+  else if (ev.kind === "choice") {
+    addBlock("choice", ev.label, ev.detail);
+    const agent = lanes[laneIndex(ev.lane || "agent")];
+    if (agent) {
+      agent.name = ev.agent_name;
+      agent.sub = "A2A server \u00b7 " + ev.endpoint.replace(/^https?:\/\//, "").replace(/\/$/, "");
+      renderLanes();
+    }
+  }
+  else if (ev.kind === "advice") {
+    const el = document.createElement("div");
+    el.className = "advice";
+    el.innerHTML = "<h3></h3><pre></pre>";
+    el.querySelector("h3").textContent = `${ev.label} \u00b7 \u201c${ev.detail.request}\u201d`;
+    el.querySelector("pre").innerHTML = markdown(ev.detail.reply);
+    attachDetail(el, ev.detail);
+    rows.appendChild(el);
+  }
+  else if (ev.kind === "error") { addBlock("error", ev.label); setActive(null); }
+  else if (ev.kind === "result") {
+    const el = document.createElement("div");
+    el.className = "result";
+    el.innerHTML = "<h3>Gift planner result</h3><pre></pre>";
+    el.querySelector("pre").innerHTML = markdown(ev.detail.summary);
+    rows.appendChild(el);
+    setActive(null);
+  } else addArrow(ev);
+  rows.scrollTop = rows.scrollHeight;
+}
+
+const rows = document.getElementById("rows");
+
+function run() {
+  if (!finished) return;
+  finished = false;
+  counts = {};
+  ["s-nanda", "s-card", "s-a2a", "s-mcp", "s-offer"].forEach(id => document.getElementById(id).textContent = "0");
+  document.getElementById("s-time").textContent = "0.0 s";
+  rows.replaceChildren();
+  activeLane = null;
+  lanes = baseLanes();
+  renderLanes();
+  const btn = document.getElementById("run");
+  btn.disabled = true; btn.textContent = "Running…";
+  const params = new URLSearchParams({
+    job, gifts: document.getElementById("gifts").value,
+    mode, target: document.getElementById("target").value,
+    checkout: document.getElementById("checkout").checked ? "1" : "0",
+    claude: document.getElementById("claude").checked ? "1" : "0",
+  });
+  source = new EventSource("/api/run?" + params);
+  const done = () => {
+    finished = true; source.close(); setActive(null);
+    btn.disabled = false; btn.textContent = "Run again";
+  };
+  source.onmessage = e => handle(JSON.parse(e.data));
+  source.addEventListener("done", done);
+  source.onerror = () => { if (!finished) { addBlock("error", "Lost connection to the flow viewer server."); done(); } };
+}
+
+lanes = baseLanes();
+renderLanes();
+loadStatus().then(() => {
+  const query = new URLSearchParams(location.search);
+  if (["negotiate", "advice"].includes(query.get("job"))) setJob(query.get("job"));
+  if (query.get("request")) document.getElementById("gifts").value = query.get("request");
+  setMode("task");
+  if (query.get("claude") === "1" && status && status.claude_available) document.getElementById("claude").checked = true;
+  if (query.get("run") === "1") run();
+});
+</script>
+</body>
+</html>

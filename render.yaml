@@ -1,0 +1,41 @@
+# Render blueprint for the two services the NANDA Index has to be able to reach:
+# the product catalog MCP server and the A2A shopping agent. Both get a public https://
+# URL, which is what the index requires — it rejects localhost card URLs.
+#
+# Deploy the catalog first, then set PRODUCT_SERVER_URL on the agent to the catalog's
+# /sse URL: the agent opens its MCP session at startup and won't start without it.
+services:
+  - type: web
+    name: product-catalog-mcp
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python product_server.py
+    healthCheckPath: /.well-known/mcp-server-card.json
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      # The seller's own negotiation agent; price negotiation is disabled without it.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+  - type: web
+    name: shopping-agent-a2a
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python a2a_server.py
+    healthCheckPath: /.well-known/agent-card.json
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      # Set to the catalog service's SSE endpoint, e.g.
+      # https://product-catalog-mcp.onrender.com/sse
+      - key: PRODUCT_SERVER_URL
+        sync: false
+      # The index this agent searches for other sellers and agents.
+      - key: NANDA_INDEX_URL
+        value: https://nanda.topcoder.com
+      # Needed for Claude-driven answers and price negotiation.
+      - key: ANTHROPIC_API_KEY
+        sync: false

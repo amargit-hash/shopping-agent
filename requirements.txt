@@ -1,0 +1,8 @@
+mcp>=1.2.0,<2
+starlette
+uvicorn
+anthropic
+httpx
+truststore
+# Pinned: the SDK's server and client APIs changed between 0.3 and 1.x.
+a2a-sdk[http-server]==1.2.2
