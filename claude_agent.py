@@ -106,6 +106,18 @@ Shopper state when their latest message was sent (tool results after that are ne
 {state}"""
 
 
+def api_error_detail(error: anthropic.APIError) -> str:
+    """What went wrong, including the failure underneath it.
+
+    A network-level failure arrives as the SDK's bare "Connection error.", which says nothing
+    about whether the host, the TLS trust store or the key's own format was the problem; the
+    exception it was raised from does.
+    """
+    detail = getattr(error, "message", None) or str(error)
+    cause = error.__cause__
+    return detail if cause is None else f"{detail} ({type(cause).__name__}: {cause})"
+
+
 class ClaudeShoppingAgent(ShoppingAgent):
     system_prompt = SYSTEM_PROMPT
 
@@ -145,7 +157,7 @@ class ClaudeShoppingAgent(ShoppingAgent):
             # Roll back the unfinished turn so the history stays a valid conversation.
             del self.history[start:]
             self.turn_starts.pop()
-            return f"Claude couldn't answer: {getattr(e, 'message', e)}"
+            return f"Claude couldn't answer: {api_error_detail(e)}"
 
     async def run_claude(self) -> str:
         # Snapshot once per turn: refreshing it between tool rounds made Claude read
