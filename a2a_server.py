@@ -19,8 +19,10 @@ set A2A_PUBLIC_URL anywhere else, or the card will advertise localhost.
 import asyncio
 import os
 from collections import OrderedDict
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 
+import anyio
+import httpx
 import uvicorn
 from a2a.helpers import new_text_message
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -30,6 +32,7 @@ from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentProvider, AgentSkill
 from a2a.utils.errors import UnsupportedOperationError
+from mcp.shared.exceptions import McpError
 from starlette.applications import Starlette
 
 from a2a_link import request_metadata
@@ -51,6 +54,11 @@ BASE_URL = PUBLIC_BASE_URL or f"http://localhost:{PORT}"
 # Deployed, the platform's proxy reaches the app from another host, so bind every interface.
 HOST = os.environ.get("A2A_HOST") or ("0.0.0.0" if PUBLIC_BASE_URL else "127.0.0.1")
 MAX_CONVERSATIONS = 100
+RECONNECT_DELAY_SECONDS = 5
+# A dead connection to the store raises one of these, and the store may simply be asleep,
+# so the connection is replaced rather than the error reported as a shopping failure.
+CONNECTION_ERRORS = (McpError, httpx.HTTPError, anyio.BrokenResourceError, anyio.ClosedResourceError,
+                     anyio.EndOfStream)
 
 def build_agent_card() -> AgentCard:
     return AgentCard(
@@ -102,30 +110,92 @@ def build_agent_card() -> AgentCard:
 class ConversationPool:
     """One shopping agent per A2A contextId, all sharing a single MCP session (plus the seller directory)."""
 
-    def __init__(self) -> None:
+    def __init__(self, endpoint: str, transport: str, source: str, name: str) -> None:
+        self.product_endpoint, self.transport = endpoint, transport
+        self.product_source, self.product_name = source, name
         self.session: TracingSession | None = None
         self.directory: SellerDirectory | None = None
-        self.product_source = ""
-        self.product_endpoint = ""
-        self.product_name = ""
         self.use_claude = bool(os.environ.get("ANTHROPIC_API_KEY"))
         self.agents: OrderedDict[str, tuple[ShoppingAgent, asyncio.Lock]] = OrderedDict()
         self.create_lock = asyncio.Lock()
+        self.broken = asyncio.Event()
 
-    async def get(self, context_id: str) -> tuple[ShoppingAgent, asyncio.Lock]:
+    def attach(self, session: TracingSession) -> None:
+        self.session = session
+        self.broken.clear()
+
+    def detach(self) -> None:
+        """Drop a connection that is gone, and the conversations that were holding it.
+
+        Their agents keep a reference to the dead session, and a cart the store can no longer
+        price is worth less than an agent that answers again.
+        """
+        self.session = None
+        self.agents.clear()
+        self.broken.clear()
+
+    def mark_broken(self) -> None:
+        """Ask the connection holder for a new connection; a request found this one dead."""
+        self.broken.set()
+
+    async def get(self, context_id: str, session: TracingSession) -> tuple[ShoppingAgent, asyncio.Lock]:
         async with self.create_lock:
             if context_id in self.agents:
                 self.agents.move_to_end(context_id)
                 return self.agents[context_id]
             if self.use_claude:
-                agent = MarketplaceShoppingAgent(self.session, self.directory, BASE_URL)
+                agent = MarketplaceShoppingAgent(session, self.directory, BASE_URL)
             else:
-                agent = ShoppingAgent(self.session)
+                agent = ShoppingAgent(session)
             await agent.start()
             self.agents[context_id] = (agent, asyncio.Lock())
             while len(self.agents) > MAX_CONVERSATIONS:
                 self.agents.popitem(last=False)
             return self.agents[context_id]
+
+
+async def keep_session(pool: ConversationPool) -> None:
+    """Hold the connection to the product server for as long as the app runs.
+
+    One task owns the connection for its whole life because an MCP session has to be closed by
+    the task that opened it, so a request handler can neither open nor replace one. Connecting
+    here rather than at startup also means a store that is asleep, as any free hosting tier is
+    when idle, delays the first answer instead of stopping this agent from starting at all.
+    """
+    while True:
+        try:
+            async with mcp_session(pool.product_endpoint, pool.transport) as session:
+                pool.attach(TracingSession(session, dst=base_of(pool.product_endpoint),
+                                           dst_name=pool.product_name))
+                print(f"Product server: {pool.product_source}")
+                await pool.broken.wait()
+                print("[a2a] reconnecting to the product server")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[a2a] product server unreachable ({type(e).__name__}: {e}); "
+                  f"retrying in {RECONNECT_DELAY_SECONDS}s")
+        pool.detach()
+        await asyncio.sleep(RECONNECT_DELAY_SECONDS)
+
+
+def is_connection_error(error: BaseException) -> bool:
+    """Whether this failure is the connection to the store rather than the shopping itself.
+
+    The MCP client runs in a task group, so a broken stream usually arrives wrapped in an
+    exception group rather than on its own.
+    """
+    if isinstance(error, CONNECTION_ERRORS):
+        return True
+    if isinstance(error, BaseExceptionGroup):
+        return any(is_connection_error(inner) for inner in error.exceptions)
+    return False
+
+
+async def cancel(task: asyncio.Task) -> None:
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
 
 
 class ShoppingAgentExecutor(AgentExecutor):
@@ -148,19 +218,31 @@ class ShoppingAgentExecutor(AgentExecutor):
                        label="earlier, at startup: shopping agent resolved its home store through NANDA",
                        detail={"product_server": self.pool.product_source})
             record_lane(self.pool.product_endpoint, "seller", self.pool.product_name)
-            agent, lock = await self.pool.get(context.context_id)
-            async with lock:
+            session = self.pool.session
+            if session is None:
+                reply = (f"I can't reach the store right now ({self.pool.product_source}). It may still be "
+                         "starting up, so please send your request again in a few seconds.")
+            else:
                 try:
-                    if quote_only and not isinstance(agent, MarketplaceShoppingAgent):
-                        reply = ("Price negotiation needs Claude: start a2a_server.py with ANTHROPIC_API_KEY set. "
-                                 "Nothing was negotiated.")
-                    else:
-                        if isinstance(agent, MarketplaceShoppingAgent):
-                            agent.quote_only = quote_only
-                        reply = await agent.handle(text) or "Send me a shopping request, e.g. 'recommend headphones under 150'."
-                        negotiations = list(getattr(agent, "negotiations", []))
+                    # Inside the guard: opening a conversation lists the store's tools, which is
+                    # itself a call that a dropped connection fails.
+                    agent, lock = await self.pool.get(context.context_id, session)
+                    async with lock:
+                        if quote_only and not isinstance(agent, MarketplaceShoppingAgent):
+                            reply = ("Price negotiation needs Claude: start a2a_server.py with ANTHROPIC_API_KEY set. "
+                                     "Nothing was negotiated.")
+                        else:
+                            if isinstance(agent, MarketplaceShoppingAgent):
+                                agent.quote_only = quote_only
+                            reply = await agent.handle(text) or "Send me a shopping request, e.g. 'recommend headphones under 150'."
+                            negotiations = list(getattr(agent, "negotiations", []))
                 except Exception as e:
-                    reply = f"Something went wrong talking to the store: {e}"
+                    if is_connection_error(e):
+                        self.pool.mark_broken()
+                        reply = ("The store's connection dropped. I'm opening a new one, so please send your "
+                                 "request again in a few seconds.")
+                    else:
+                        reply = f"Something went wrong talking to the store: {e}"
         finally:
             current_trace.reset(token)
             current_sink.reset(sink_token)
@@ -183,7 +265,7 @@ class ShoppingAgentExecutor(AgentExecutor):
 
 
 def build_app(endpoint: str, transport: str, source: str, name: str = "Product server") -> Starlette:
-    pool = ConversationPool()
+    pool = ConversationPool(endpoint, transport, source, name)
     card = build_agent_card()
     handler = DefaultRequestHandler(
         agent_executor=ShoppingAgentExecutor(pool), task_store=InMemoryTaskStore(), agent_card=card,
@@ -192,13 +274,11 @@ def build_app(endpoint: str, transport: str, source: str, name: str = "Product s
     @asynccontextmanager
     async def lifespan(app: Starlette):
         async with AsyncExitStack() as stack:
-            session = await stack.enter_async_context(mcp_session(endpoint, transport))
-            pool.session = TracingSession(session, dst=base_of(endpoint), dst_name=name)
-            pool.product_source, pool.product_endpoint, pool.product_name = source, endpoint, name
             pool.directory = SellerDirectory()
             stack.push_async_callback(pool.directory.close)
+            keeper = asyncio.create_task(keep_session(pool))
+            stack.push_async_callback(cancel, keeper)
             mode = "Claude" if pool.use_claude else "rule-based"
-            print(f"Product server: {source}")
             print(f"A2A agent card: {BASE_URL}/.well-known/agent-card.json ({mode} agent)")
             yield
 
